@@ -32,8 +32,8 @@ def get_arg_parser():
 
 
 async def archivate(request):
-    '''Archive and download photos'''
-    
+    '''Archive and send photos to user'''
+
     user_args = get_arg_parser()
     do_logging = user_args.do_logging
     INTERVAL_SECS = user_args.delay
@@ -47,13 +47,16 @@ async def archivate(request):
     dir_path = '{}/{}'.format(dir_path, request.match_info['archive_hash'])
 
     if os.path.exists(dir_path):
+        # Create stream object
         resp = web.StreamResponse()
         resp.force_close()
 
+        # Send headers.
         resp.headers['Content-Type'] = 'application/zip'
         resp.headers['Content-Disposition'] = 'attachment; filename="archive.zip"'
         await resp.prepare(request)
 
+        # Create async subprocess for zipping.
         cmd = 'zip -r - {}'.format(dir_path)
         process = await asyncio.create_subprocess_shell(
                                     cmd,
@@ -62,10 +65,18 @@ async def archivate(request):
                                     )
 
         try:
+
+            # Get chunks from process stdout.
             while True:
                 archive_chunk = await process.stdout.readline()
+
+                # Check for end of the file.
                 if archive_chunk:
+
+                    # Write chunk to response.
                     await resp.write(archive_chunk)
+
+                    # Logging
                     if bool(do_logging):
                         logging.info(
                             'Sending archive {}, chunk {} bytes'.format(
@@ -75,6 +86,7 @@ async def archivate(request):
                             )
 
                 else:
+                    # Write end of the file, kill the process and out from loop.
                     await resp.write_eof()
                     process.kill()
                     process.wait()
