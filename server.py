@@ -1,9 +1,96 @@
+import os.path
+import datetime
+import argparse
+import logging
+import asyncio
+
 from aiohttp import web
 import aiofiles
 
 
+def get_arg_parser():
+    parser = argparse.ArgumentParser(description='Async downloader')
+    parser.add_argument(
+        '--do_logging',
+        help='Logging the process (0 or 1, 0 by default)',
+        type=int, default=0
+        )
+    parser.add_argument(
+        '--delay',
+        help='Delay response, sec (0.001 by default)',
+        type=float,
+        default=0.001
+        )
+    parser.add_argument(
+        '--dir',
+        help='Folder with photos',
+        type=str,
+        default='test_photos'
+        )
+    args = parser.parse_args()
+    return args
+
+
 async def archivate(request):
-    raise NotImplementedError
+    '''Archive and download photos'''
+    
+    user_args = get_arg_parser()
+    do_logging = user_args.do_logging
+    INTERVAL_SECS = user_args.delay
+    dir_path = user_args.dir
+
+    if not dir_path:
+        exit('Script argument required (path to folder with photos)')
+    if not os.path.isdir(dir_path):
+        exit('Folder does not exists')
+
+    dir_path = '{}/{}'.format(dir_path, request.match_info['archive_hash'])
+
+    if os.path.exists(dir_path):
+        resp = web.StreamResponse()
+        resp.force_close()
+
+        resp.headers['Content-Type'] = 'application/zip'
+        resp.headers['Content-Disposition'] = 'attachment; filename="archive.zip"'
+        await resp.prepare(request)
+
+        cmd = 'zip -r - {}'.format(dir_path)
+        process = await asyncio.create_subprocess_shell(
+                                    cmd,
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE
+                                    )
+
+        try:
+            while True:
+                archive_chunk = await process.stdout.readline()
+                if archive_chunk:
+                    await resp.write(archive_chunk)
+                    if bool(do_logging):
+                        logging.info(
+                            'Sending archive {}, chunk {} bytes'.format(
+                                request.match_info['archive_hash'],
+                                len(archive_chunk)
+                                )
+                            )
+
+                else:
+                    await resp.write_eof()
+                    process.kill()
+                    process.wait()
+                    break
+
+                await asyncio.sleep(INTERVAL_SECS)
+
+        except asyncio.CancelledError as e:
+            raise
+
+        finally:
+            resp.force_close()
+            return resp
+
+    else:
+        return web.HTTPNotFound(text='Error 404: archive does not exists.')
 
 
 async def handle_index_page(request):
@@ -13,6 +100,11 @@ async def handle_index_page(request):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s,%(msecs)d %(levelname)s: %(message)s',
+        datefmt='%H:%M:%S',
+        )
     app = web.Application()
     app.add_routes([
         web.get('/', handle_index_page),
