@@ -11,7 +11,7 @@ import aiofiles
 def get_arg_parser():
     parser = argparse.ArgumentParser(description='Async downloader')
     parser.add_argument(
-        '--do_logging',
+        '--logs',
         help='Logging the process (0 or 1, 0 by default)',
         type=int, default=0
         )
@@ -32,10 +32,10 @@ def get_arg_parser():
 
 
 async def archivate(request):
-    '''Archive and send photos to user'''
+    '''Asynchronously archive directory on the fly and send it to client.'''
 
     user_args = get_arg_parser()
-    do_logging = user_args.do_logging
+    logs = user_args.logs
     INTERVAL_SECS = user_args.delay
     dir_path = user_args.dir
 
@@ -56,7 +56,7 @@ async def archivate(request):
         resp.headers['Content-Disposition'] = 'attachment; filename="archive.zip"'
         await resp.prepare(request)
 
-        # Create async subprocess for zipping.
+        # Create async subprocess for archive directory.
         cmd = 'zip -r - {}'.format(dir_path)
         process = await asyncio.create_subprocess_shell(
                                     cmd,
@@ -77,7 +77,7 @@ async def archivate(request):
                     await resp.write(archive_chunk)
 
                     # Logging
-                    if bool(do_logging):
+                    if bool(logs):
                         logging.info(
                             'Sending archive {}, chunk {} bytes'.format(
                                 request.match_info['archive_hash'],
