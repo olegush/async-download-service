@@ -21,7 +21,7 @@ For creating and downloading an archive user got a link like
 
 ## How to install
 
-Python 3.7 and libraries from **requirements.txt** should be installed
+Python 3.6 and libraries from **requirements.txt** should be installed
 
 ```bash
 pip install -r requirements.txt
