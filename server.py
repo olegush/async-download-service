@@ -3,12 +3,16 @@ import datetime
 import argparse
 import logging
 import asyncio
+from functools import partial
 
 from aiohttp import web
 import aiofiles
 
 
-def get_arg_parser():
+LOGGING_LEVELS = [logging.CRITICAL, logging.INFO]
+
+
+def get_args():
     parser = argparse.ArgumentParser(description='Async downloader')
     parser.add_argument(
         '--logs',
@@ -25,84 +29,63 @@ def get_arg_parser():
         '--dir',
         help='Folder with photos',
         type=str,
-        default='test_photos'
         )
     args = parser.parse_args()
     return args
 
 
-async def archivate(request):
+async def archivate(delay, dir, request):
     '''Asynchronously archive directory on the fly and send it to client.'''
 
-    user_args = get_arg_parser()
-    logs = user_args.logs
-    INTERVAL_SECS = user_args.delay
-    dir_path = user_args.dir
+    dir_path = '{}/{}'.format(dir, request.match_info['archive_hash'])
 
-    if not dir_path:
-        exit('Script argument required (path to folder with photos)')
-    if not os.path.isdir(dir_path):
-        exit('Folder does not exists')
+    if not os.path.exists(dir_path):
+        return web.HTTPNotFound(text='Error 404: archive does not exists.')
 
-    dir_path = '{}/{}'.format(dir_path, request.match_info['archive_hash'])
+    # Create stream object
+    resp = web.StreamResponse()
 
-    if os.path.exists(dir_path):
-        # Create stream object
-        resp = web.StreamResponse()
+    # Send headers.
+    resp.headers['Content-Type'] = 'application/zip'
+    resp.headers['Content-Disposition'] = 'attachment; filename="archive.zip"'
+    await resp.prepare(request)
+
+    # Create async subprocess for archive directory.
+    cmd = 'zip -r - {}'.format(dir_path)
+    process = await asyncio.create_subprocess_shell(
+                                cmd,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE
+                                )
+
+    try:
+
+        while True:
+
+            # Get chunks from process stdout, check if exists,
+            # write it to response, log and delay.
+            archive_chunk = await process.stdout.readline()
+            if not archive_chunk:
+                break
+            await resp.write(archive_chunk)
+            logging.info(
+                'Sending archive {}, chunk {} bytes'.format(
+                    request.match_info['archive_hash'],
+                    len(archive_chunk)
+                    )
+                )
+            await asyncio.sleep(delay)
+
+        await resp.write_eof()
+        process.kill()
+        process.wait()
+
+    except asyncio.CancelledError as e:
         resp.force_close()
 
-        # Send headers.
-        resp.headers['Content-Type'] = 'application/zip'
-        resp.headers['Content-Disposition'] = 'attachment; filename="archive.zip"'
-        await resp.prepare(request)
-
-        # Create async subprocess for archive directory.
-        cmd = 'zip -r - {}'.format(dir_path)
-        process = await asyncio.create_subprocess_shell(
-                                    cmd,
-                                    stdout=asyncio.subprocess.PIPE,
-                                    stderr=asyncio.subprocess.PIPE
-                                    )
-
-        try:
-
-            # Get chunks from process stdout.
-            while True:
-                archive_chunk = await process.stdout.readline()
-
-                # Check for end of the file.
-                if archive_chunk:
-
-                    # Write chunk to response.
-                    await resp.write(archive_chunk)
-
-                    # Logging
-                    if bool(logs):
-                        logging.info(
-                            'Sending archive {}, chunk {} bytes'.format(
-                                request.match_info['archive_hash'],
-                                len(archive_chunk)
-                                )
-                            )
-
-                else:
-                    # Write end of the file, kill the process and out from loop.
-                    await resp.write_eof()
-                    process.kill()
-                    process.wait()
-                    break
-
-                await asyncio.sleep(INTERVAL_SECS)
-
-        except asyncio.CancelledError as e:
-            raise
-
-        finally:
-            resp.force_close()
-            return resp
-
-    else:
-        return web.HTTPNotFound(text='Error 404: archive does not exists.')
+    finally:
+        resp.force_close()
+        return resp
 
 
 async def handle_index_page(request):
@@ -112,14 +95,25 @@ async def handle_index_page(request):
 
 
 if __name__ == '__main__':
+    args = get_args()
+    logs, delay, dir = args.logs, args.delay, args.dir
+
+    if not dir:
+        exit('Script argument required (path to folder with photos)')
+    if not os.path.isdir(dir):
+        exit('Folder does not exists')
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=LOGGING_LEVELS[logs],
         format='%(asctime)s,%(msecs)d %(levelname)s: %(message)s',
         datefmt='%H:%M:%S',
         )
+
+    archivate_with_args = partial(archivate, delay, dir)
+
     app = web.Application()
     app.add_routes([
         web.get('/', handle_index_page),
-        web.get('/archive/{archive_hash}/', archivate),
+        web.get('/archive/{archive_hash}/', archivate_with_args),
     ])
     web.run_app(app)
