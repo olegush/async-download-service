@@ -17,7 +17,9 @@ def get_args():
     parser.add_argument(
         '--logs',
         help='Logging the process (0 or 1, 0 by default)',
-        type=int, default=0
+        type=int,
+        default=0,
+        choices=[0, 1]
         )
     parser.add_argument(
         '--delay',
@@ -26,7 +28,7 @@ def get_args():
         default=0.001
         )
     parser.add_argument(
-        '--dir',
+        '--dir_img',
         help='Folder with photos',
         type=str,
         )
@@ -34,12 +36,12 @@ def get_args():
     return args
 
 
-async def archivate(delay, dir, request):
+async def archivate(delay, dir_img, request):
     '''Asynchronously archive directory on the fly and send it to client.'''
 
-    dir_path = '{}/{}'.format(dir, request.match_info['archive_hash'])
+    dir_img_path = '{}/{}'.format(dir_img, request.match_info['archive_hash'])
 
-    if not os.path.exists(dir_path):
+    if not os.path.exists(dir_img_path):
         return web.HTTPNotFound(text='Error 404: archive does not exists.')
 
     # Create stream object
@@ -51,7 +53,7 @@ async def archivate(delay, dir, request):
     await resp.prepare(request)
 
     # Create async subprocess for archive directory.
-    cmd = 'zip -r - {}'.format(dir_path)
+    cmd = 'zip -r - {}'.format(dir_img_path)
     process = await asyncio.create_subprocess_shell(
                                 cmd,
                                 stdout=asyncio.subprocess.PIPE,
@@ -78,10 +80,12 @@ async def archivate(delay, dir, request):
 
         await resp.write_eof()
         process.kill()
-        process.wait()
+        await process.wait()
 
     except asyncio.CancelledError as e:
         resp.force_close()
+        process.kill()
+        await process.wait()
 
     finally:
         resp.force_close()
@@ -96,11 +100,11 @@ async def handle_index_page(request):
 
 if __name__ == '__main__':
     args = get_args()
-    logs, delay, dir = args.logs, args.delay, args.dir
+    logs, delay, dir_img = args.logs, args.delay, args.dir_img
 
-    if not dir:
+    if not dir_img:
         exit('Script argument required (path to folder with photos)')
-    if not os.path.isdir(dir):
+    if not os.path.isdir(dir_img):
         exit('Folder does not exists')
 
     logging.basicConfig(
@@ -109,7 +113,7 @@ if __name__ == '__main__':
         datefmt='%H:%M:%S',
         )
 
-    archivate_with_args = partial(archivate, delay, dir)
+    archivate_with_args = partial(archivate, delay, dir_img)
 
     app = web.Application()
     app.add_routes([
